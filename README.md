@@ -22,4 +22,4 @@ Curso práctico de 12 semanas enfocado en desarrollo de sistemas embebidos usand
 - VSCode + extensiones
 
 ## 📄 Licencia
-📄 Licencia: Este repositorio se publica bajo la Licencia MIT. Ver [LICENSE.md](LICENSE.md).
+📄 Licencia: Este repositorio se publica bajo la Licencia MIT. Ver [LICENSE.md](./LICENSE.md).
