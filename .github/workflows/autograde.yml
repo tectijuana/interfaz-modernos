@@ -11,19 +11,24 @@ permissions:
 jobs:
   grade:
     runs-on: ubuntu-latest
+    env:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}   # secreto del repo
+      RUBRICA_PROMPT: ${{ secrets.RUBRICA_PROMPT }}   # secreto del repo (rúbrica interna)
+      MODEL_MAIN: gpt-5                                # cambia a gpt-5-thinking si lo prefieres
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Instalar toolchain ARM64 + QEMU
+      - name: Instalar toolchain ARM64 + QEMU + Python
         run: |
           sudo apt-get update
           sudo apt-get install -y \
             qemu-user \
             binutils-aarch64-linux-gnu \
             gcc-aarch64-linux-gnu \
-            make
+            make \
+            python3-pip
 
       - name: Compilar
         run: make build
@@ -46,7 +51,6 @@ jobs:
       - name: Calcular puntaje simple (60/40)
         id: score
         run: |
-          # Puntaje sencillo: si pasan tests => 60 pts; compila => +40 pts
           PASS_TESTS=0
           if [ "${{ steps.tests.outputs.exitcode }}" = "0" ]; then
             PASS_TESTS=1
@@ -61,32 +65,84 @@ jobs:
           if [ "$PASS_TESTS" = "1" ]; then SCORE=$((SCORE+60)); fi
 
           echo "score=$SCORE" >> $GITHUB_OUTPUT
-          echo "Puntaje: $SCORE/100" >> $GITHUB_STEP_SUMMARY
-          echo '### Resumen Autograding' >> $GITHUB_STEP_SUMMARY
-          echo "- Compilación: $([ $PASS_BUILD = 1 ] && echo ✅ || echo ❌)" >> $GITHUB_STEP_SUMMARY
-          echo "- Pruebas: $([ $PASS_TESTS = 1 ] && echo ✅ || echo ❌)" >> $GITHUB_STEP_SUMMARY
+          {
+            echo "### Resumen Autograding"
+            echo "- Compilación: $([ $PASS_BUILD = 1 ] && echo ✅ || echo ❌)"
+            echo "- Pruebas: $([ $PASS_TESTS = 1 ] && echo ✅ || echo ❌)"
+            echo "Puntaje: $SCORE/100"
+          } >> $GITHUB_STEP_SUMMARY
 
-      - name: Comentar en el PR (si aplica)
+      - name: 🧠 Generar feedback en español (GPT-5, rúbrica en secreto)
+        id: gpt_feedback
+        if: ${{ github.event_name == 'pull_request' }}
+        run: |
+          python3 -m pip install --quiet --upgrade openai
+          python3 - << 'PY'
+import os, glob
+from openai import OpenAI
+
+client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
+rubrica = os.environ["RUBRICA_PROMPT"]
+modelo  = os.environ.get("MODEL_MAIN", "gpt-5")
+
+def read_sources():
+    chunks = []
+    for path in sorted(glob.glob("src/**/*.S", recursive=True) + glob.glob("src/**/*.s", recursive=True)):
+        try:
+            with open(path, "r", encoding="utf-8", errors="ignore") as f:
+                chunks.append(f"\n---\nArchivo: {path}\n\n{f.read()}\n")
+        except Exception as e:
+            chunks.append(f"\n---\nArchivo: {path}\n\n<error leyendo archivo: {e}>\n")
+    return "".join(chunks) if chunks else "<sin código .S/.s en /src>"
+
+def read_results():
+    try:
+        with open("tests/results.txt", "r", encoding="utf-8", errors="ignore") as f:
+            return f.read()
+    except:
+        return "(sin resultados)"
+
+codigo = read_sources()
+logs = read_results()
+
+prompt = f"""{rubrica}
+
+Código del estudiante:
+{codigo}
+
+Resumen de autograding (logs):
+{logs}
+"""
+
+resp = client.responses.create(model=modelo, input=prompt)
+feedback = resp.output_text.strip()
+
+with open("FEEDBACK.md", "w", encoding="utf-8") as f:
+    f.write(feedback)
+PY
+
+      - name: Comentar en el PR (puntaje + resultados + feedback)
         if: ${{ github.event_name == 'pull_request' }}
         uses: actions/github-script@v7
         with:
           script: |
             const fs = require('fs');
-            const results = fs.readFileSync('tests/results.txt', 'utf8');
+            const results = fs.existsSync('tests/results.txt') ? fs.readFileSync('tests/results.txt','utf8') : '(sin resultados)';
+            const feedback = fs.existsSync('FEEDBACK.md') ? fs.readFileSync('FEEDBACK.md','utf8') : '(sin feedback)';
             const score = `${{ steps.score.outputs.score }}`;
             const body = [
               '## 🧪 Autograding ARM64 (QEMU)',
               '',
-              `**Puntaje:** ${score}/100`,
+              `**Puntaje automático:** ${score}/100`,
               '',
               '### Resultados de pruebas',
               '```',
               results,
               '```',
-              '### Nota',
-              '- La calificación final puede considerar rúbrica detallada (RUBRICA.md).',
+              '---',
+              '## 🧠 Retroalimentación (asistente docente, español)',
+              feedback
             ].join('\n');
-
             github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
