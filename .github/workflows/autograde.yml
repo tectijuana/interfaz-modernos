@@ -33,11 +33,21 @@ jobs:
       - name: Compilar
         run: make build
 
+      - name: Asegurar permisos de ejecución para run_tests.sh
+        run: |
+          if [ -f tests/run_tests.sh ]; then
+            echo "Dando permiso de ejecución a tests/run_tests.sh"
+            chmod +x tests/run_tests.sh
+          else
+            echo "⚠️ No se encontró tests/run_tests.sh"
+          fi
+
       - name: Ejecutar pruebas
         id: tests
         run: |
           bash tests/run_tests.sh > tests/results.txt
           echo "exitcode=$?" >> $GITHUB_OUTPUT
+
 
       - name: Subir artefactos (logs y binarios)
         uses: actions/upload-artifact@v4
